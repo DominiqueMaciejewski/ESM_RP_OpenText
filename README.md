@@ -1,9 +1,9 @@
-# ESM_RP_OpenText
-This is the GitHub Repository for all analysis scripts for the paper "Behind the Number: Using Open-Ended Responses to Uncover Response Processes in Emotion Ratings in ESM Studies".
+# Response Processes in ESM Studies
+This is the GitHub Repository for all analysis scripts for the paper **Behind the Number: Using Open-Ended Responses to Uncover Response Processes in Emotion Ratings in ESM Studies**. 
 
 The files that can be found here are:
 * `RPESM_Dataprep_20260903_v1.1.Rmd`: R script for data preparation. Here all coded response processes from the consensus files were merged, cleaned and added back to the ESM data file.
-* `NAME`: R script for all analyses reported in paper
+* **`NAME`: R script for all analyses reported in paper (TO ADD)**
 * `RPESM_compare-coders_2025-09-16.R`: R script for creating consensus files to compare response process codes of two independent coders  
 
 The materials of the paper can be found on the OSF-page of the project: <https://osf.io/md9xa/>, specifically the files:
@@ -15,5 +15,5 @@ The materials of the paper can be found on the OSF-page of the project: <https:/
 * <https://osf.io/md9xa/files/bz6n3>: Codebook response processes with full decision rules, additional examples, and version history
 * <https://osf.io/md9xa/files/ejqzd>: Interaction html file visualizing different iterations of codebook response processes
 
-The data of the paper can be found on the Yoda research data management platform (restricted use): DOI-LINK added upon publication.
+The data of the paper can be found on the Yoda research data management platform (restricted use): **DOI-LINK added upon publication (TO ADD)**.
 
