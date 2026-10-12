@@ -1,0 +1,745 @@
+---
+title: "Response Processes in ESM - ESM responses paper"
+author: "Dominique Maciejewski"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999) 
+set.seed(42)
+sessionInfo()
+```
+
+# Read Me
+
+Data-prepartion of RPESM data
+
+Date Created: 2026-01-09
+Date adjusted (+reason): 
+2026-05-06: Not adjusted, just saved the part of the dataprep script in a separate script than the analyses
+2026-16-06: I found out that the interview date of cognitive interview 1 of participant 7153736 as wrong (March instead of February). I cleaned the RP data again and thus also had to rerun the data preparation script here.
+2026-09-03: There were 10 cases where the type of evidence collection was coded, but not the time. These were manually added 
+
+Copyright (c) Dominique Maciejewski
+Email: d.f.maciejewski@tilburguniversity.edu
+
+# Library
+
+```{r library}
+library(here)
+library(dplyr)
+library(esmpack)
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(writexl)
+library(janitor)
+library(pheatmap)
+library(RColorBrewer)
+library(viridis)
+```
+
+# Data preparation 
+## Merge all consensus files (coded RP processes) 
+
+Here I merge all coded response processes from the consensus files (excel files). These represent the agreed-upon codes between the two independent coders.
+
+```{r merge consensus files}
+# make list of all filenames
+Projectwd = here()
+list_of_files = list.files(path = paste(Projectwd,"/Consensus/Final", sep = ""), pattern = "\\.xlsx$", full.names = TRUE)
+
+# read and combine all data
+consensus_codes = list_of_files %>%
+  setNames(nm = tools::file_path_sans_ext(basename(.))) %>% 
+  map_df(~ read_excel(.x, sheet = 1, col_types = "text"), .id = "file_ID")
+
+# Extract time and participant variable (ID is observation per participant here, participant ID from filenaming)
+consensus_codes$time = str_extract(consensus_codes$ID , "\\d+")
+consensus_codes$participant_ID = str_extract(consensus_codes$file_ID , "\\d+")
+
+# select relevant columns
+consensus_codes = consensus_codes %>%
+  dplyr::select(participant_ID, time, Emotion, RP, 
+                overall_agreement_percentage, partial_agreement_percentage,
+                consensus_coder)
+
+# Change variable structure
+consensus_codes = consensus_codes %>%
+ mutate(
+    across(c(participant_ID, Emotion, RP, consensus_coder), ~ as.character(.)),
+    across(time, ~ as.integer(.)),
+    across(c(overall_agreement_percentage, partial_agreement_percentage), ~ as.numeric(.)))
+
+```
+
+Now I need to manually correct the participant ID. This is because the link between the participant ID in mpath and Qualtrics went wrong for some participants, which we only found out after data cleaning and coding. This was the case for 7 participants. 
+
+Thus, I am here manually correcting the participant IDs, so that later the merging with the rest of the data will go well.
+
+To be able to read back the comments from coders on certain participant, I added a column in the coder overview that contains both the previous (faulty) participant ID and the new (correct) participant ID. Thus, if we want to check specific participants, we need to look both.
+
+Note that I already corrected the participant ID in the data cleaning script of the original data on 16-01-2026. 
+
+- The data cleaning can be found in the project folder: "TSB0017 RP_ESM_NWO (Projectfolder)/3_Data" \
+- The participant overview file is here: "TSB0017 RP_ESM_NWO (Projectfolder)/2_Data collection/Participant Information/Participant overview.xlsx" \
+- The coder overview file is here: "/Nextcloud2/Shared/RPESM_LorentzWorkshop/Papers/RPESM_Coderassignment_RP_MPath_2025-05-09.xlsx" \ 
+
+```{r correct participant ID}
+consensus_codes = consensus_codes %>%
+  mutate(participant_ID = case_when(
+    participant_ID == "7153736" ~ "2860237",
+    participant_ID == "8804399" ~ "4594238",
+    participant_ID == "4594238" ~ "5686562",
+    participant_ID == "7070134" ~ "5883641",
+    participant_ID == "5883641" ~ "7070134",
+    participant_ID == "5686562" ~ "7153736",
+    participant_ID == "2860237" ~ "8804399",
+    TRUE ~ participant_ID
+  ))
+
+```
+
+
+## Cleaning consensus file (coded RP processes) 
+
+### Check typos in codes in consensus variable
+
+First, check whether there are no typos in the consensus variable (i.e., the agreed upon codes between the two coders). Coders typically copied these, but I want to be sure.
+
+```{r check typos}
+
+# Read in the list of codes
+Codebook_name = "RPESM_Codingscheme_RP_MPath_2025-09-11.csv" 
+Codebook = read.csv(paste(Projectwd,Codebook_name,sep ="/")) 
+
+# Select only final codes (there were some changes in the codebook during coding, but we only added new codes and did not delete old codes to not mess with the shiny app). Here I am deselected old codes.
+Codebook = Codebook %>%  
+  slice(-(2:3))
+
+# Make vector from all correct codes 
+allowed_codes = Codebook %>%
+  mutate(Code = str_squish(Code)) %>%   # trim spaces
+  pull(Code)
+
+# split consensus_coder variable (per row one code) and find anything that does not exactly match codebook
+bad_codes = consensus_codes %>%
+  mutate(row_id = row_number(),
+         consensus_coder = str_replace_all(consensus_coder, "\n", ";")) %>%
+  separate_rows(consensus_coder, sep = ";") %>%
+  mutate(consensus_coder = str_squish(consensus_coder)) %>%
+  filter(!is.na(consensus_coder), consensus_coder != "") %>%
+  filter(!consensus_coder %in% allowed_codes) %>%
+  distinct(consensus_coder) %>%
+  arrange(consensus_coder)
+
+bad_codes
+
+# inspect rows where codes do not exactly match
+bad_rows = consensus_codes %>%
+  mutate(row_id = row_number(),
+         consensus_coder = str_replace_all(consensus_coder, "\n", ";")) %>%
+  separate_rows(consensus_coder, sep = ";") %>%
+  mutate(consensus_coder = str_squish(consensus_coder)) %>%
+  filter(!is.na(consensus_coder), consensus_coder != "") %>%
+  filter(!consensus_coder %in% allowed_codes) %>%
+  select(row_id, participant_ID, RP, consensus_coder)
+
+bad_rows
+
+```
+
+These are the errors and what the correct code should be:
+
+- Absent Evidence Average Level Comparison -> Absent Evidence;  Average Level Comparison (missing ; between codes)\
+- Absent Evidence Collection --> Absent Evidence (no "Collection")\
+- Absent evidence	--> Absent Evidence (Evidence should be Capital)	\
+- Comparison to Points on the Scale --> Numbered Comparison (Code was renamed during coding)\
+- Embodied evidence		--> Embodied Evidence (Evidence should be Capital)				\
+- Gut feeling	-->  Gut Feeling (Feeling should be capital)			\
+- I ntrospection (Affect)	--> Introspection (Affect) (accidental whitespace)\
+- Idiosyncratic code --> Idiosyncratic Code (Code should be capital)				\
+- Intensity Comparison Future Evidence Collection	--> Intensity Comparison; Future Evidence Collection	(missing ; between codes)	\
+- Introspection	--> there was no extra specification of what type of Introspection, so I checked the original open text box and the comments from the coders and Introspection should not be applied because there is already a comparison standard (average level comparison). For the record, one of the two coders had not applied that and the beep before they had coded this correctly.			\
+- Past Temporal Comparison) --> Past Temporal Comparison (without the bracket)\
+- Struggle identifying feeling --> Struggle Identifying Feeling (all should be in capitals)\
+- Unclear to coder --> Unclear to Coder (Coder should be in capitals)\
+
+### Correct typos in codes
+
+```{r correct codes}
+
+# Define all corrections
+corrections = tibble::tribble(
+  ~bad,                                      ~good,
+  "Absent Evidence Average Level Comparison", "Absent Evidence; Average Level Comparison",
+  "Absent Evidence Collection", "Absent Evidence",
+  "Absent evidence","Absent Evidence",
+  "Comparison to Points on the Scale", "Numbered Comparison",
+  "Embodied evidence", "Embodied Evidence",
+  "Gut feeling", "Gut Feeling",
+  "I ntrospection \\(Affect\\)", "Introspection (Affect)",
+  "Idiosyncratic code", "Idiosyncratic Code",
+  "Intensity Comparison Future Evidence Collection", "Intensity Comparison; Future Evidence Collection",
+  "Past Temporal Comparison\\)", "Past Temporal Comparison",
+  "Struggle identifying feeling", "Struggle Identifying Feeling",
+  "Unclear to coder", "Unclear to Coder"
+)
+
+corrections_vec = setNames(corrections$good, corrections$bad)
+
+# Apply corrections
+consensus_codes = consensus_codes %>%
+  mutate(
+    consensus_coder = str_replace_all(consensus_coder, corrections_vec)
+  )
+
+# The entry "Introspection" was done separately (otherwise all introspection codes may be changed) 
+
+bad_rows # row number: 1767 Participant_ID: 4628010 
+
+consensus_codes$consensus_coder[1767] # Get the full code
+
+consensus_codes = consensus_codes %>%
+  mutate(
+    consensus_coder = case_when(
+      row_number() == 1767 ~ "Current Evidence Collection; Contextual Evidence; Criteria-Based Comparison; Counterfactual Evidence",
+      TRUE ~ consensus_coder
+    )
+  )
+
+consensus_codes$consensus_coder[1767] # Check, corrected
+
+# Recheck if all typos are corrected
+
+# split consensus_coder variable (per row one code) and find anything that does not exactly match codebook
+bad_codes = consensus_codes %>%
+  mutate(row_id = row_number(),
+         consensus_coder = str_replace_all(consensus_coder, "\n", ";")) %>%
+  separate_rows(consensus_coder, sep = ";") %>%
+  mutate(consensus_coder = str_squish(consensus_coder)) %>%
+  filter(!is.na(consensus_coder), consensus_coder != "") %>%
+  filter(!consensus_coder %in% allowed_codes) %>%
+  distinct(consensus_coder) %>%
+  arrange(consensus_coder)
+
+sum(bad_codes) # None left!
+
+```
+
+
+### Correct whitespace in codes
+
+Make sure that all codes have the same structure of "code; code; code" etc
+
+```{r correct whitespace}
+
+# Write function for type of mistakes to check for
+normalize_codes = function(x) {
+  x %>%
+      str_replace_all("[\r\n]+", "") %>%        # drop line breaks if any
+      str_replace_all("\\s*;\\s*", "; ") %>%    # normalize spacing around ;
+      str_replace_all("(;\\s*){2,}", "; ") %>%  # collapse repeated separators (removes empty segments)
+      str_replace_all(";\\s*$", "") %>%         # remove trailing ;
+      str_squish()
+}
+
+# Identify rows with bad structure
+bad_structure = consensus_codes %>%
+  mutate(
+    row_number = row_number(),
+    normalized = normalize_codes(consensus_coder)
+  ) %>%
+  filter(consensus_coder != normalized) %>%
+  select(row_number, consensus_coder, normalized)
+
+bad_structure # 160 rows
+
+# Normalize
+consensus_codes = consensus_codes %>%
+  mutate(consensus_coder = normalize_codes(consensus_coder))
+
+# Check
+bad_structure = consensus_codes %>%
+  mutate(row_number = row_number()) %>%
+  filter(!grepl("^[^;]+(; [^;]+)*$", consensus_coder)) %>%
+  select(row_number, consensus_coder)
+
+sum(bad_structure)  #none left
+
+```
+
+### Split into separate categories
+
+Make dummy variables from consensus coder variable (which is now still a string with code; code; code)
+
+```{r split codes}
+
+# Split consensus_coder into long format (one row per code)
+codes_long = consensus_codes %>%
+  mutate(row_id = row_number()) %>%
+  separate_rows(consensus_coder, sep = "; ")
+
+# Create dummy variables
+codes_dummies = codes_long %>%
+  mutate(value = 1L) %>%
+  distinct(row_id, consensus_coder, .keep_all = TRUE) %>%
+  pivot_wider(
+    names_from  = consensus_coder,
+    values_from = value,
+    values_fill = 0L
+  )
+
+# Select only relevant variables
+codes_dummies = codes_dummies %>%
+  select(participant_ID,time,8:33) 
+
+# Join back to original data
+consensus_codes_dummies = consensus_codes %>%
+  mutate(row_id = row_number()) %>%
+  left_join(codes_dummies, by = c("participant_ID", "time")) %>%
+  select(-row_id)
+
+# Check whether sum of dummy variables matches number of codes in consensus file
+bad_dummies = consensus_codes_dummies %>%
+  mutate(
+    row_id = row_number(),
+    n_codes = str_count(consensus_coder, ";") + 1,
+    sum_dummies = rowSums(across(8:33), na.rm = TRUE)
+  ) %>%
+  filter(n_codes != sum_dummies)
+
+bad_dummies # There are five rows where there is a duplicate code
+
+# I will manually fix this now for the rows (the dummy variables were already correctly calculated, so I am only fixing the string variables)
+consensus_codes_dummies$consensus_coder[c(1028, 1047, 2231, 3506, 3871)]
+
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    consensus_coder = case_when(
+      row_number() == 1028 ~ "Contextual Evidence; Current Evidence Collection; Referring to Other Emotions; Future Evidence Collection",
+      row_number() == 1047 ~ "Current Evidence Collection; Health Evidence; Interpersonal Evidence; Past Evidence Collection; Contextual Evidence",
+      row_number() == 2231 ~ "Introspection (Affect); Past Evidence Collection; Absent Evidence; Average Level Comparison",
+      row_number() == 3506 ~ "Current Evidence Collection; Referring to Other Emotions; Contextual Evidence",
+      row_number() == 3871 ~ "Contextual Evidence; Current Evidence Collection; Introspection (Affect); Referring to Other Emotions; Past Evidence Collection",
+      TRUE ~ consensus_coder
+    )
+  )
+
+# Recheck
+consensus_codes_dummies$consensus_coder[c(1028, 1047, 2231, 3506, 3871)]
+
+bad_dummies = consensus_codes_dummies %>%
+  mutate(
+    row_id = row_number(),
+    n_codes = str_count(consensus_coder, ";") + 1,
+    sum_dummies = rowSums(across(8:33), na.rm = TRUE)
+  ) %>%
+  filter(n_codes != sum_dummies)
+
+sum(bad_dummies) # solved!
+
+# Check whether there were codes that were never applied (and for which thus no dummy variables were created)
+dummy_codes = names(consensus_codes_dummies)[8:33] #names from dummy variables
+
+missing_codes = setdiff(allowed_codes, dummy_codes)
+
+missing_codes # "Personally Impactful Event Comparison" has never been coded.
+
+# Add a column for this code (and code as 0, since never used)
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate("Personally Impactful Event Comparison" = 0L)
+
+# Make all consensus dummy variables numeric
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(across(c(2,8:34), as.numeric))
+
+```
+
+### Variable cleaning
+
+```{r variable cleaning}
+ 
+# Rename Embodied Evidence into Introspection (Embodied)
+# During coding we decided to put bodily signals under the internal processes instead of evidence collection, because it fits theoretically better 
+consensus_codes_dummies = consensus_codes_dummies %>%
+  dplyr::rename("Introspection (Embodied)"= "Embodied Evidence")
+
+# Rename all variable names into lower case variables
+names(consensus_codes_dummies)[-1] =
+  janitor::make_clean_names(names(consensus_codes_dummies)[-1])
+
+# Reorder variables to match codebook
+consensus_codes_dummies = consensus_codes_dummies  %>%
+  select(c(1:7,
+           "average_level_comparison", "numbered_comparison", "intensity_comparison",
+           "past_temporal_comparison", "future_temporal_comparison", "personally_impactful_event_comparison",
+           "criteria_based_comparison", "social_comparison", 
+           "gut_feeling", "introspection_affect", "introspection_cognition", "introspection_embodied", 
+           "referring_to_other_emotions",
+           "struggle_identifying_feeling", "control_over_situation_or_emotion", "self_concept_identity",
+           "current_evidence_collection","past_evidence_collection","future_evidence_collection",
+           "contextual_evidence", "absent_evidence", "counterfactual_evidence", "interpersonal_evidence", "health_evidence",
+           "unsure_participant", "idiosyncratic_code", "unclear_to_coder"))
+
+```
+
+
+## Extra checks consensus files
+### Add unclear to coder if onhoorbaar/inaudible
+During coding, we decided to add the code unclear to coder if part of the recorded responses contained inaudible parts. I am checking here whether this was done consistently.
+
+```{r unclear to coder}
+
+# Check when unclear to coder is coded 0 and 1 when there is inaudible/onhoorbaar in voice recordings
+unclear = consensus_codes_dummies %>%
+  filter(str_detect(rp, "(?i)\\b(onhoorbaar|inaudible)\\b")) %>%
+  select(rp, unclear_to_coder) 
+
+table(unclear$unclear_to_coder) # in identified responses (19 times coded as 0, 10 as 1)
+table(consensus_codes_dummies$unclear_to_coder) #in all responses (24 times coded as 0)
+
+# Recode unclear to coder to 1 for all responses when there is inaudible/onhoorbaar in voice recordings
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    unclear_to_coder = case_when(
+      str_detect(rp, "(?i)\\b(onhoorbaar|inaudible)\\b") ~ 1,
+      TRUE ~ unclear_to_coder))
+
+# Check 
+table(consensus_codes_dummies$unclear_to_coder) #now 43 times (24 (was already coded) +19 (was additionally coded))
+
+#all changed (and not more!)
+```
+
+### Check absent evidence code
+When people say I am not irritated/nervous etc about anything, then only the code absent evidence should be applied and not also introspection (unless they also explicitly name another feeling), because participants mention the absence of a reason that is indicative of their numerical choice (rather than really checking in with their feeling).
+
+I decided to check this, because I sometimes noted that during consensus meetings that this was a point of discussion that came back.
+
+I go through all identified responses (Filter on Absent Evidence and Introspection (Affect)) and write down the number and change this by hand.
+
+```{r absent evidence}
+
+# filter (inspect and noting cases that I needed to change)
+filtered_absent = consensus_codes_dummies %>%
+     filter(absent_evidence == 1, introspection_affect == 1) %>%
+     select(c(1:4,7))
+
+# recode into absent evidence only (recode introspection_affect to 0)
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    introspection_affect = case_when(
+    (participant_ID == 3711616 & time %in% c(74, 92, 98)) |
+    (participant_ID == 4628010 & time%in% c(15,72,100)) |
+    (participant_ID == 4730345 & time==50) |  
+    (participant_ID == 5493735 & time==90) |
+    (participant_ID == 7070134 & time==81) |
+    (participant_ID == 6256253 & time==25) |
+    (participant_ID == 6686994 & time%in% c(10,17,27,35)) |  
+    (participant_ID == 6848653 & time==58) |
+    (participant_ID == 7165533 & time%in% c(1,76,86)) ~ 0,
+      TRUE ~ introspection_affect
+    )
+  )
+
+```
+
+### Check double coding introspection with comparison codes
+The codebook states that when people engaged in comparison standards, no extra introspection should be coded, because all comparison standards implicitly involve introspection (you need to check in with your feeling to make a comparison with something).
+There should only be a double code of Introspection (Affect) in case there was new information that was not related/explained by the comparison standard. 
+
+I want to check whether this was done consistently, because I saw this coming back consistently in the consensus meetings.
+
+I go through all identified responses (Filter on (all) comparison standards & Introspection (Affect)) and write down the number and change this by hand.
+
+```{r double coding introspection comparison standards}
+
+# filter (here I noted down cases that I wanted to change)
+filtered_comparison = consensus_codes_dummies %>%
+     filter((average_level_comparison == 1|
+             criteria_based_comparison==1|
+             future_temporal_comparison==1| 
+             past_temporal_comparison==1|
+             intensity_comparison==1|
+             numbered_comparison==1|
+             social_comparison==1), 
+             introspection_affect == 1) %>%
+     select(c(1:4,7))
+
+# Write out as excel (easier to read, since responses are quite long)
+filtered_comparison_file = paste0(Projectwd,"/Analyses/2_Data/filtered_comparison.xlsx")
+ 
+write_xlsx(filtered_comparison, filtered_comparison_file)
+
+# Renamed file by hand into filtered_comparison_commented.xlsx and added notes there
+
+# Recode identified responses
+# Note, for participant 5883641, we consistently decided to double code because there was always a first checking in taking place (participant had really long responses)
+
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    introspection_affect = case_when(
+    (participant_ID == 1035361 & time == 68) |
+    (participant_ID == 1450957 & time%in% c(15,16,22,25,32,36,45,52)) |  
+    (participant_ID == 2405158 & time%in% c(10,11,70)) |
+    (participant_ID == 3143426 & time == 50) |
+    (participant_ID == 3859893 & time == 87) |      
+    (participant_ID == 3955759 & time == 5) |      
+    (participant_ID == 4628010 & time%in% c(23,37,79)) |      
+    (participant_ID == 5079076 & time == 13) |            
+    (participant_ID == 7153736 & time%in% c(30,50,91)) |           
+    (participant_ID == 7070134 & time%in% c(33,48)) |        
+    (participant_ID == 6184089 & time%in% c(7,22,28,80)) |        
+    (participant_ID == 6256253 & time%in% c(39,45)) |       
+    (participant_ID == 6686994 & time == 74) |        
+    (participant_ID == 6848653 & time%in% c(14,20,25,28,45)) | 
+    (participant_ID == 7165533 & time == 4) |            
+    (participant_ID == 7455716 & time == 5) |
+    (participant_ID == 8217082 & time%in% c(12,82)) | 
+    (participant_ID == 8341581 & time == 28) |      
+    (participant_ID == 8703265 & time%in% c(23,27,28,43,54,86,96)) |       
+    (participant_ID == 8761970 & time%in% c(25,28,30,33,36,38,41,42,44,49,56,72,73,79,86,90,91)) ~ 0,
+      TRUE ~ introspection_affect),
+    numbered_comparison = case_when(
+    (participant_ID == 7153736 & time == 30) ~ 0,
+      TRUE ~ numbered_comparison),
+    future_temporal_comparison = case_when(
+    (participant_ID == 7153736 & time == 30) ~ 1,
+      TRUE ~ future_temporal_comparison) 
+    )
+ 
+
+```
+
+
+### Check Evidence collection codes
+The codebook states that coders should always code the time and type of evidence. 
+I will check here whether this was consistently done for both combinations (type, time coded? time, type coded?)
+
+#### Type was coded, but not time
+Filter on evidence times and then check whether type was applied or not. 
+
+I go through all identified responses (Filter on evidence times & whether no type was applied) and write down the number and change this by hand.
+
+```{r check type codes with evidence collection times}
+# filter (here I noted down cases that I wanted to change)
+filtered_type_evidence = consensus_codes_dummies %>%
+     filter((current_evidence_collection == 1|
+             past_evidence_collection == 1|
+             future_evidence_collection == 1),
+             contextual_evidence == 0,
+             absent_evidence== 0,
+             counterfactual_evidence== 0, 
+             interpersonal_evidence== 0,
+             health_evidence==0) %>%
+     select(c(1:4,7))
+
+# Happened 10 times
+
+# Recoding responses
+# For 1450957 and 5079076, there was actually an idiosyncratic code, so time could be taken out (there was not evidence collection apart from that)
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    current_evidence_collection = case_when(
+    (participant_ID == 1450957  & time%in% c(1,20,28,32,51,71,98) |
+    (participant_ID == 5079076 & time == 67)) ~ 0,
+      TRUE ~ current_evidence_collection),
+    contextual_evidence = case_when(
+    (participant_ID == 2405158 & time == 19) |
+    (participant_ID == 8341581 & time == 42)  ~ 1,
+      TRUE ~ contextual_evidence),
+    introspection_cognition = case_when(
+    (participant_ID == 8341581  & time == 42)  ~ 1,
+      TRUE ~ introspection_cognition))
+
+```
+
+#### Time was coded, but not type
+Filter on (all) evidence types and then check whether time was applied or not. 
+
+I go through all identified responses (Filter on (all) evidence types & whether no time was applied) and write down the number and change this by hand.
+
+```{r check time codes with evidence collection type}
+# filter (here I noted down cases that I wanted to change)
+filtered_time_evidence = consensus_codes_dummies %>%
+     filter((contextual_evidence == 1|
+             absent_evidence==1|
+             counterfactual_evidence==1| 
+             interpersonal_evidence==1|
+             health_evidence==1), 
+             current_evidence_collection == 0,
+             past_evidence_collection == 0,
+             future_evidence_collection == 0) %>%
+     select(c(1:4,7))
+
+# Happened 6 times
+
+# Recoding responses
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    current_evidence_collection = case_when(
+    (participant_ID == 5079076  & time == 20) |
+    (participant_ID == 8341581 & time%in% c(8,82,83)) ~ 1,
+      TRUE ~ current_evidence_collection),
+    past_evidence_collection = case_when(
+    (participant_ID == 3859893 & time == 31) |
+    (participant_ID == 8761970  & time == 62)  ~ 1,
+      TRUE ~ past_evidence_collection))
+
+```
+
+
+### Add extra variables
+
+Added the following extra variables: Number of coded variables per response (sum of dummy variables) and broad response processes categories (comparison standards, internal processes, evidence collection, other codes).
+
+```{r}
+# Add sum of dummy variables (number of codes per timepoint)
+ consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(number_codes = rowSums(across(8:34), na.rm = TRUE))
+
+# Add broad categories of response process categories
+
+consensus_codes_dummies = consensus_codes_dummies %>%
+  mutate(
+    comparison_standards = case_when(
+      average_level_comparison == 1 |
+      numbered_comparison == 1 |
+      intensity_comparison == 1 |
+      past_temporal_comparison == 1 |
+      future_temporal_comparison == 1 |
+      personally_impactful_event_comparison == 1 |
+      criteria_based_comparison == 1 |
+      social_comparison == 1 ~ 1,
+      TRUE ~ 0
+    ),
+
+    internal_processes = case_when(
+      gut_feeling == 1 |
+      introspection_affect == 1 |
+      introspection_cognition == 1 |
+      introspection_embodied == 1 |
+      referring_to_other_emotions == 1 |
+      struggle_identifying_feeling == 1 |
+      control_over_situation_or_emotion == 1 |
+      self_concept_identity == 1 ~ 1,
+      TRUE ~ 0
+    ),
+
+    evidence_collection = case_when(
+      current_evidence_collection == 1 |
+      past_evidence_collection == 1 |
+      future_evidence_collection == 1 |
+      contextual_evidence == 1 |
+      absent_evidence == 1 |
+      counterfactual_evidence == 1 |
+      interpersonal_evidence == 1 |
+      health_evidence == 1 ~ 1,
+      TRUE ~ 0
+    ),
+    
+     other_codes = case_when(
+      unsure_participant == 1 |
+      idiosyncratic_code == 1 |
+      unclear_to_coder == 1  ~ 1,
+      TRUE ~ 0
+    ),
+  )
+
+  
+```
+
+## Merge coded RP processes file with cleaned mPath and Qualtrics data file  
+
+```{r merge data files coded rp}
+# Load R files with raw data
+load("C:\\Users\\maciejew\\Nextcloud\\TSB0017 RP_ESM_NWO (Projectfolder)\\3_Data\\B_Cleaned Data\\RPESM_MPath_Qualtrics_clean_2026-16-06.RData")
+
+## Merge data response processes codes
+# Note that for the coding in the shiny app, we only selected rows with valid data on response processes 
+# To merge codes and raw data, I need to make a new observation variable within participants only for valid rows in the raw data (this matches the "time" variable in the coded consensus file)
+
+ data = data %>% 
+   arrange(participant_ID, timeStampStart) %>% # Order the dataframe
+   group_by(participant_ID) %>% 
+     mutate(
+     time = if_else(
+       if_any(ends_with("_RP"), ~ !is.na(.)),
+       cumsum(if_any(ends_with("_RP"), ~ !is.na(.))),
+       NA_integer_)) %>%
+    ungroup() 
+
+# Arrange data within participants and time
+data = data %>% arrange(participant_ID, time)
+consensus_codes_dummies = consensus_codes_dummies %>% arrange(participant_ID, time)
+
+# Merge data 
+merged_data = data %>%
+  left_join(consensus_codes_dummies,by = c("participant_ID", "time")) %>%
+  arrange(participant_ID, timeStampStart) %>%
+  dplyr::rename(RP_emotion=emotion)
+
+# Check whether merging went correctly with the new participant IDs by comparing the open-text box of the response process variables
+# from the cleaned dataset ((5 different variables for 5 different emotions)) to the open-text box of all emotions collapsed (used in coding)
+
+# Compare
+merged_data = merged_data %>%
+  mutate(
+    RP_responses = coalesce(happy_RP, relaxed_RP, down_RP, nervous_RP, irritated_RP),
+    RP_format = coalesce(happy_RP_format, relaxed_RP_format, down_RP_format, nervous_RP_format, irritated_RP_format),
+    match = RP_responses == rp
+  )
+
+table(merged_data$match) #209 non-matches
+
+# Inspect match variable
+inspect = merged_data %>%
+  filter(match == FALSE) %>%
+  select(
+    participant_ID, obsno,
+    rp,
+    RP_responses, consensus_coder)
+
+```
+
+These were all cases where there was a special character, like ï or ' (which were changed into different encodings, because otherwise the file that was read into the shiny app gave errors). So, all ok!
+
+
+```{r coalese}
+# Coalesce reaction times RP variables (format and response) - so that same format as response processes
+merged_data = merged_data %>%
+  mutate(
+    RP_format_rt = coalesce(happy_RP_format_rt, relaxed_RP_format_rt, 
+                         down_RP_format_rt, nervous_RP_format_rt, irritated_RP_format_rt),
+    RP_responses_rt = coalesce(happy_RP_rt, relaxed_RP_rt, 
+                         down_RP_rt, nervous_RP_rt, irritated_RP_rt))
+
+```
+
+
+
+# Save datafile
+
+```{r save}
+
+# Reorder variables 
+RPESM_merged_data = merged_data %>%
+  dplyr::select(participant_ID:p_ev_soc_rt,
+                RP_format_rt, RP_responses_rt,
+                RP_emotion, RP_format, RP_responses,
+                partial_agreement_percentage,
+                average_level_comparison:other_codes, 
+                Start_date:BFI_Open)
+
+# save as csv and R file
+
+Projectwd = here()
+
+save(RPESM_merged_data,file=paste(Projectwd,"/Analyses/2_Data/RPESM_MPath_Qualtrics_RP_2026-09-03.RData", sep = ""))
+
+write.csv(RPESM_merged_data,file=paste(Projectwd,"/Analyses/2_Data/RPESM_MPath_Qualtrics_RP_2026-09-03.csv", sep = ""), na="", row.names=FALSE) 
+
+```
