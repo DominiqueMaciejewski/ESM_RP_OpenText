@@ -88,9 +88,7 @@ table(data_person[["culture"]])
 ### ---- Dropout ----
 table(data_person[["dropout"]])
 
-do.call(
-  rbind,
-  lapply(c("compliance", "duration", "age"), function(col) {
+do.call(rbind, lapply(c("compliance", "duration", "age"), function(col) {
     x <- data_person[[col]]
     data.frame(
       variable = col,
@@ -98,10 +96,7 @@ do.call(
       mean = round(mean(x, na.rm = TRUE), 2),
       sd = round(sd(x, na.rm = TRUE), 2),
       min = round(min(x, na.rm = TRUE), 2),
-      max = round(max(x, na.rm = TRUE), 2)
-    )
-  })
-)
+      max = round(max(x, na.rm = TRUE), 2))}))
 
 # ---- Data Frame ----
 ## Select RP variables
@@ -193,7 +188,7 @@ rel_freq_df <- freq_df %>%
   mutate(`Relative frequency (Category)` = round(`Category Presence`/ 4171 * 100, 2), .after = "Category Presence") %>%
   mutate(Code = factor(Code, levels = rev(Code)),
          Category = factor(Category, levels = rev(unique(Category))),
-         `Relative frequency` = round(Frequency/ 4171 * 100, 2),
+         `Relative frequency` = round(`Code Frequency`/ 4171 * 100, 2),
          `Category labels` = factor(paste0(`Category`, " \n(", `Relative frequency (Category)`, "%)")))
 
 ggplot(rel_freq_df, aes(x = Code, y = `Relative frequency`, fill = `Category labels` )) +
