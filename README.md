@@ -3,7 +3,7 @@ This is the GitHub Repository for all analysis scripts for the paper **Behind th
 
 The files that can be found here are:
 * `RPESM_Dataprep_20260903_v1.1.Rmd`: R script for data preparation. Here all coded response processes from the consensus files were merged, cleaned and added back to the ESM data file.
-* **`NAME`: R script for all analyses reported in paper (TO ADD)**
+* `RPESM_AnalysesPaper.R`: R script for all analyses reported in paper
 * `RPESM_compare-coders_2025-09-16.R`: R script for creating consensus files to compare response process codes of two independent coders  
 
 The materials of the paper can be found on the OSF-page of the project: <https://osf.io/md9xa/>, specifically the files:
